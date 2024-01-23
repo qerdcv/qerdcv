@@ -1,0 +1,36 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - 'master'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.21.5
+
+      - name: Install SSH Key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.RASPBERRY_PASS }}
+          known_hosts: 'placeholder'
+
+      - name: Adding known_hosts
+        run: ssh-keyscan -H ${{ secrets.RASPBERRY_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Build
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -a -installsuffix cgo -v -o app ./cmd/
+
+      - name: Deploy
+        run: |
+          rsync -avz app ${{ secrets.RASPBERRY_USER }}@${{ secrets.RASPBERRY_HOST }}:~
+          ssh -T ${{ secrets.RASPBERRY_USER }}@${{ secrets.RASPBERRY_HOST }} << EOF
+            sudo systemctl restart app
+          EOF

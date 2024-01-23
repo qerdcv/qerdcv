@@ -16,7 +16,7 @@ func NewHandler(
 	profileH *ProfileHandler,
 ) http.Handler {
 	m := http.NewServeMux()
-	m.HandleFunc("/profile", profileH.Index)
+	m.HandleFunc("/", profileH.Index)
 
 	fileServer := http.FileServer(http.FS(staticFS))
 	m.Handle(

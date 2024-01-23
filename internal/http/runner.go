@@ -11,7 +11,7 @@ import (
 
 func RunServer(ctx context.Context, h http.Handler, logger *slog.Logger) error {
 	s := http.Server{
-		Addr:         ":8080",
+		Addr:         "127.0.0.1:8080",
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 2 * time.Second,
 		Handler:      h,
