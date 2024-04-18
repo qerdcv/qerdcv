@@ -2,43 +2,80 @@ package main
 
 import (
 	"context"
-	"html/template"
-	"io/fs"
+	"database/sql"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	_ "github.com/lib/pq"
+
 	"github.com/qerdcv/qerdcv/internal/config"
-	"github.com/qerdcv/qerdcv/internal/http"
-	"github.com/qerdcv/qerdcv/web"
+	"github.com/qerdcv/qerdcv/internal/repositories"
+	"github.com/qerdcv/qerdcv/internal/repositories/migrations"
+	"github.com/qerdcv/qerdcv/internal/server"
+	"github.com/qerdcv/qerdcv/internal/server/handlers"
+	"github.com/qerdcv/qerdcv/internal/server/middlewares"
+	"github.com/qerdcv/qerdcv/internal/services"
+	"github.com/qerdcv/qerdcv/pkg/migrator"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}).WithAttrs([]slog.Attr{slog.String("version", config.Version)}))
+		Level: slog.LevelInfo,
+	}))
 
-	tplFS, err := template.ParseFS(web.Template, "template/*")
+	cfg, err := config.New()
 	if err != nil {
-		logger.Error("template parse fs", slog.Any("error", err))
+		logger.Error("failed to build config", slog.Any("err", err))
 		return
 	}
 
-	tpl := http.NewTemplate(tplFS)
-	staticFS, err := fs.Sub(web.Static, "assets")
+	v, d, err := migrator.Migrate(migrations.Migrations, cfg.DB.DSN())
 	if err != nil {
-		logger.Error("fs sub", slog.Any("error", err))
-
+		logger.Error("apply migration",
+			slog.Any("err", err),
+			slog.Int("version", int(v)),
+			slog.Bool("dirty", d))
 		return
 	}
 
-	s := http.NewHandler(logger, staticFS, http.NewProfileHandler(tpl))
+	logger.Info("apply migration",
+		slog.Any("err", err),
+		slog.Int("version", int(v)),
+		slog.Bool("dirty", d))
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	appCtx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT)
+	defer cancel()
 
-	if err := http.RunServer(ctx, s, logger); err != nil {
-		logger.Error("http run server", slog.Any("error", err.Error()))
+	db, err := sql.Open("postgres", cfg.DB.DSN())
+	if err != nil {
+		logger.Error("sql open", slog.Any("err", err))
+		return
+	}
+
+	userService := services.NewUserService(
+		repositories.NewUserRepo(db),
+	)
+
+	s := server.New(
+		logger,
+		cfg.Server,
+		middlewares.Auth(userService),
+		handlers.NewUserHandler(
+			logger,
+			userService,
+		),
+		handlers.NewBudgetHandler(
+			logger,
+			services.NewBudgetService(
+				repositories.NewBudgetRepo(db),
+			),
+		),
+	)
+
+	if err = s.Run(appCtx); err != nil {
+		logger.Error("run server", slog.Any("err", err))
+		return
 	}
 }
